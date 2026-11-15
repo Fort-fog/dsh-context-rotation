@@ -50,5 +50,6 @@ test('handoff stays inside its configured hard character budget', () => {
 test('config defaults rotate before stock 80 percent pressure', () => {
   const config = resolveConfig({})
   assert.equal(config.thresholdRatio, 0.8)
+  assert.equal(config.thresholdTokens, 52000)
   assert.equal(config.handoffMaxChars, 24000)
 })

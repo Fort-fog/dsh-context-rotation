@@ -5,8 +5,8 @@ import fs from 'node:fs'
 const index = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
 const plan = fs.readFileSync(new URL('../handoff-plan.js', import.meta.url), 'utf8')
 
-test('80 percent handoff is described as mandatory', () => {
-  assert.match(index, /mandatory 80\/20 handoff started/)
+test('configured context handoff is described as mandatory', () => {
+  assert.match(index, /mandatory context handoff started/)
   assert.match(plan, /MANDATORY MODE SWITCH/)
 })
 
@@ -16,5 +16,5 @@ test('invalid handoff never deletes planning state and falls back to normal work
 })
 
 test('startup identifies current version', () => {
-  assert.match(index, /loaded v0\.4\.5/)
+  assert.match(index, /loaded v0\.5\.0/)
 })

@@ -1,7 +1,7 @@
 {
   "name": "dsh-context-rotation",
-  "version": "0.4.5",
-  "description": "DeepSeek Harness hard 80/20 handoff with durable next-turn auto-continuation after max-output cutoffs.",
+  "version": "0.5.0",
+  "description": "DeepSeek Harness early context rotation with durable handoff, overflow recovery, and fresh-turn continuation.",
   "type": "module",
   "main": "index.js",
   "exports": {

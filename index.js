@@ -25,6 +25,36 @@ export const name = 'dsh-context-rotation'
 
 const ROTATION_PREFIX = 'dsh-rotate-'
 
+function rotationThresholdTokens(config, contextWindow) {
+  const ratioThreshold = Math.floor(contextWindow * config.thresholdRatio)
+  return Math.min(ratioThreshold, config.thresholdTokens)
+}
+
+function isGeneratedCheckpointText(text) {
+  if (typeof text !== 'string') return false
+  const value = text.trim()
+  if (!value) return false
+  return (
+    /automatically generated checkpoint condensing an earlier span/i.test(value)
+    || /Primary Request and Intent:/i.test(value) && /checkpoint/i.test(value)
+    || /summary is not smaller than the shadowed content/i.test(value)
+    || /summarization produced no text summary content/i.test(value)
+  )
+}
+
+function filterGeneratedCheckpointMessages(messages) {
+  const source = Array.isArray(messages) ? messages : []
+  return source.filter(message => {
+    if (message?.role === 'user') return true
+    if (!Array.isArray(message?.content)) return true
+    const text = message.content
+      .filter(block => block?.type === 'text' && typeof block.text === 'string')
+      .map(block => block.text)
+      .join('\n')
+    return !isGeneratedCheckpointText(text)
+  })
+}
+
 function pluginMessage(text) {
   return {
     id: randomUUID(),
@@ -194,7 +224,7 @@ async function createRotatedSession({
 }
 
 export function apply(ctx, rawConfig = {}) {
-  const probe = createRuntimeProbe({ version: '0.4.5' })
+  const probe = createRuntimeProbe({ version: '0.5.0' })
   const config = resolveConfig(rawConfig)
   const owned = new Map()
   const finishTracker = createFinishTracker()
@@ -206,8 +236,9 @@ export function apply(ctx, rawConfig = {}) {
   const handoffs = new Map()
 
   ctx.logger.info(
-    `dsh-context-rotation: loaded v0.4.5; `
+    `dsh-context-rotation: loaded v0.5.0; `
     + `handoffThreshold=${(config.thresholdRatio * 100).toFixed(1)}%; `
+    + `thresholdTokens=${config.thresholdTokens}; `
     + `emergencyRatio=${(config.emergencyRatio * 100).toFixed(1)}%; `
     + `maxOutputContinuations=${config.maxOutputContinuations}`,
   )
@@ -239,7 +270,7 @@ export function apply(ctx, rawConfig = {}) {
     continuationChains.delete(sessionId)
   })
 
-  // Primary 80% gate. This runs before request derivation, so an ordinary user
+  // Primary rotation gate. This runs before request derivation, so an ordinary user
   // step cannot slip past the handoff boundary and overflow the provider.
   ctx.on('agent/pre-step', async ({ agent, messages, turn, step, signal, modelSelection }, next) => {
     probe.hit('agent/pre-step', { sessionId: agent.session.id, turn, step, pendingMessages: Array.isArray(messages) ? messages.length : 0 })
@@ -256,7 +287,7 @@ export function apply(ctx, rawConfig = {}) {
         handoffs.set(session.id, existing)
       }
 
-      // A model that attempts any tool after the 80% boundary has violated the
+      // A model that attempts any tool after the rotation boundary has violated the
       // handoff freeze. The tool itself was denied by tools/pre-execute. Do not
       // give the old session another chance to resume work: persist durable
       // recovery state locally and rotate immediately.
@@ -266,7 +297,7 @@ export function apply(ctx, rawConfig = {}) {
             filePath: existing.filePath,
             sourceSessionId: session.id,
             cwd: session.header?.cwd,
-            messages: session.deriveMessages(),
+            messages: filterGeneratedCheckpointMessages(session.deriveMessages()),
             pendingMessages: messages,
             pressureTokens: existing.pressure?.projectedTokens ?? existing.pressure?.pressureTokens ?? 0,
             contextWindow: existing.pressure?.contextWindow ?? 65536,
@@ -308,7 +339,7 @@ export function apply(ctx, rawConfig = {}) {
         kind: 'enter',
         messages: [pluginMessage([
           '[DSH HARD HANDOFF MODE]',
-          'The 80% boundary is already active.',
+          'The context rotation boundary is already active.',
           'Do not execute project work and do not call tools.',
           `Output the COMPLETE Markdown handoff for: ${existing.filePath}`,
           'The plugin itself will save your text and rotate to a fresh chat.',
@@ -344,8 +375,9 @@ export function apply(ctx, rawConfig = {}) {
     const pendingTokens = estimatePendingTokens(tokenMeter, messages)
     const projectedTokens = pressure.pressureTokens + pendingTokens
     const projectedRatio = projectedTokens / pressure.contextWindow
+    const thresholdTokens = rotationThresholdTokens(config, pressure.contextWindow)
 
-    if (projectedRatio < config.thresholdRatio) return await next()
+    if (projectedTokens < thresholdTokens) return await next()
 
     if (session.header?.origin === 'subagent') {
       const pendingText = pendingMessagesText(messages, config)
@@ -420,7 +452,7 @@ export function apply(ctx, rawConfig = {}) {
           filePath,
           sourceSessionId: session.id,
           cwd,
-          messages: session.deriveMessages(),
+          messages: filterGeneratedCheckpointMessages(session.deriveMessages()),
           pendingMessages: messages,
           pressureTokens: projectedTokens,
           contextWindow: pressure.contextWindow,
@@ -469,7 +501,7 @@ export function apply(ctx, rawConfig = {}) {
       }
     }
 
-    // Normal 80/20 path: replace the claimed user batch with a dedicated
+    // Normal managed handoff path: replace the claimed user batch with a dedicated
     // handoff-planning message. The pending input is embedded verbatim in that
     // instruction so it is not lost when the original claim is not admitted.
     const state = {
@@ -491,7 +523,7 @@ export function apply(ctx, rawConfig = {}) {
     handoffs.set(session.id, state)
 
     ctx.logger.info(
-      `dsh-context-rotation: mandatory 80/20 handoff started for ${session.id}; `
+      `dsh-context-rotation: mandatory context handoff started for ${session.id}; `
       + `projected=${projectedTokens}/${pressure.contextWindow} `
       + `(${(projectedRatio * 100).toFixed(1)}%); file=${filePath}`,
     )
@@ -539,7 +571,7 @@ export function apply(ctx, rawConfig = {}) {
       info: {
         name: 'dsh-context-rotation',
         code: 'HANDOFF_TOOL_FROZEN',
-        reason: '80% context handoff boundary is active',
+        reason: 'context rotation boundary is active',
       },
     }
   })
@@ -590,7 +622,7 @@ export function apply(ctx, rawConfig = {}) {
     )
 
     const filePath = handoffPath(cwd, session.id, config.handoffDirectory)
-    const transcript = session.deriveMessages()
+    const transcript = filterGeneratedCheckpointMessages(session.deriveMessages())
     const lastUser = [...transcript].reverse().find(message => message?.role === 'user')
     const pendingMessages = lastUser ? [lastUser] : []
     const modelSelection = modelSelectionBySession.get(session.id) ?? {
@@ -763,7 +795,7 @@ export function apply(ctx, rawConfig = {}) {
             '[DSH MANDATORY HANDOFF RECOVERY]',
             `The handoff file is still invalid: ${existing.filePath}`,
             `Validation result: ${validation.reason}`,
-            'The 80% boundary has already been crossed, so normal project work MUST NOT resume in this session.',
+            'The context rotation boundary has already been crossed, so normal project work MUST NOT resume in this session.',
             'Use this step only to output a minimal but valid COMPLETE Markdown handoff with every required section.',
             'Preserve the pending user request and exact next action.',
             'Do not call tools. The plugin will save the Markdown text itself.',

@@ -3,6 +3,7 @@
       name: dsh-context-rotation
       config:
         thresholdRatio: 0.80
+        thresholdTokens: 52000
         handoffMaxChars: 24000
         maxRecentMessages: 18
         userBudgetChars: 12000

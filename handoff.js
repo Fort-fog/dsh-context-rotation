@@ -183,6 +183,7 @@ export function resolveConfig(config = {}) {
 
   return Object.freeze({
     thresholdRatio: number('thresholdRatio', 0.80, 0.25, 0.95),
+    thresholdTokens: Math.floor(number('thresholdTokens', 52000, 8000, 1000000)),
     handoffMaxChars: Math.floor(number('handoffMaxChars', 24000, 4000, 100000)),
     maxRecentMessages: Math.floor(number('maxRecentMessages', 18, 4, 100)),
     userBudgetChars: Math.floor(number('userBudgetChars', 12000, 2000, 60000)),

@@ -13,5 +13,5 @@ test('plugin uses tokenMeter contextPressure before compatibility fallback', () 
 })
 
 test('plugin emits a deterministic startup log', () => {
-  assert.match(source, /dsh-context-rotation: loaded v0\.4\.5/)
+  assert.match(source, /dsh-context-rotation: loaded v0\.5\.0/)
 })
