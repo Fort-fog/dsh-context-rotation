@@ -1,0 +1,15 @@
+- insert:
+    - id: dsh-context-rotation
+      name: dsh-context-rotation
+      config:
+        thresholdRatio: 0.80
+        handoffMaxChars: 24000
+        maxRecentMessages: 18
+        userBudgetChars: 12000
+        recentBudgetChars: 10000
+        toolResultExcerptChars: 1200
+        maxOutputContinuations: 6
+        handoffPlanAttempts: 3
+        handoffMinChars: 800
+        handoffDirectory: .dsh-handoff
+        emergencyRatio: 0.95

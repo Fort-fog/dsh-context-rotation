@@ -1,0 +1,51 @@
+{
+  "name": "dsh-context-rotation",
+  "version": "0.4.5",
+  "description": "DeepSeek Harness hard 80/20 handoff with durable next-turn auto-continuation after max-output cutoffs.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./handoff": "./handoff.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./continuation": "./continuation.js",
+    "./handoff-plan": "./handoff-plan.js",
+    "./overflow": "./overflow.js",
+    "./runtime-probe": "./runtime-probe.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "handoff-plan.js",
+    "overflow.js",
+    "runtime-probe.js",
+    "continuation.js",
+    "handoff.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check index.js && node --check handoff.js && node --check handoff-plan.js && node --check overflow.js && node --check runtime-probe.js && node --check continuation.js && node --check client.js && npm test"
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  },
+  "license": "MIT"
+}
