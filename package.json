@@ -1,7 +1,7 @@
 {
   "name": "dsh-context-rotation",
-  "version": "0.5.0",
-  "description": "DeepSeek Harness early context rotation with durable handoff, overflow recovery, and fresh-turn continuation.",
+  "version": "0.5.7",
+  "description": "DeepSeek Harness context rotation and durable handoff with provider-specific thresholds: Strata 100K on large contexts and llama.cpp 50K up to 62K.",
   "type": "module",
   "main": "index.js",
   "exports": {

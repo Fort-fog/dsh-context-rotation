@@ -63,3 +63,19 @@ test('max-output policy is documented as a fresh-turn continuation', async () =>
   assert.match(source, /agent\.followup\(pluginMessage\(notice\)\)/)
   assert.match(source, /continuationChains/)
 })
+
+
+test('continuation chain is not cleared from session/event turn/end', async () => {
+  const source = await import('node:fs/promises').then(fs =>
+    fs.readFile(new URL('../index.js', import.meta.url), 'utf8')
+  )
+  const eventStart = source.indexOf("ctx.on('session/event'")
+  const disposedStart = source.indexOf("ctx.on('agent/disposed'", eventStart)
+  const eventBlock = source.slice(eventStart, disposedStart)
+  assert.doesNotMatch(eventBlock, /continuationChains\.delete\(session\.id\)/)
+})
+
+test('default max-output continuation cap is three', async () => {
+  const { resolveConfig } = await import('../handoff.js')
+  assert.equal(resolveConfig({}).maxOutputContinuations, 3)
+})

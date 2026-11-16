@@ -6,7 +6,7 @@ const index = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
 
 test('primary early-rotation gate lives in agent/pre-step', () => {
   assert.match(index, /ctx\.on\('agent\/pre-step'/)
-  assert.match(index, /rotationThresholdTokens\(config, pressure\.contextWindow\)/)
+  assert.match(index, /rotationThresholdTokens\(config, pressure\.contextWindow, modelSelection\?\.provider\)/)
   assert.match(index, /projectedTokens < thresholdTokens/)
 })
 

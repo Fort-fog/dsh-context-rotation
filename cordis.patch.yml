@@ -4,12 +4,18 @@
       config:
         thresholdRatio: 0.80
         thresholdTokens: 52000
+        largeContextThresholdTokens: 52000
+        largeContextMinWindow: 100000
+        strataLargeContextThresholdTokens: 100000
+        strataLargeContextMinWindow: 100000
+        llamaCppThresholdTokens: 50000
+        llamaCppMaxWindow: 62000
         handoffMaxChars: 24000
         maxRecentMessages: 18
         userBudgetChars: 12000
         recentBudgetChars: 10000
         toolResultExcerptChars: 1200
-        maxOutputContinuations: 6
+        maxOutputContinuations: 3
         handoffPlanAttempts: 3
         handoffMinChars: 800
         handoffDirectory: .dsh-handoff

@@ -25,9 +25,92 @@ export const name = 'dsh-context-rotation'
 
 const ROTATION_PREFIX = 'dsh-rotate-'
 
-function rotationThresholdTokens(config, contextWindow) {
+function normalizedProvider(provider) {
+  return String(provider ?? '').trim().toLowerCase()
+}
+
+function isStrataProvider(provider) {
+  const value = normalizedProvider(provider)
+  return value === 'strata' || value.startsWith('strata-') || value.includes('strata local')
+}
+
+function isLlamaCppProvider(provider) {
+  const value = normalizedProvider(provider).replace(/[\s_-]+/g, '')
+  return value === 'llama.cpp' || value === 'llamacpp' || value.includes('llamacpp')
+}
+
+export function rotationThresholdTokens(config, contextWindow, provider = '') {
   const ratioThreshold = Math.floor(contextWindow * config.thresholdRatio)
-  return Math.min(ratioThreshold, config.thresholdTokens)
+
+  // Strata gets a dedicated large-context boundary so a 128K/131K model can
+  // actually use most of its window before handoff. Keep the ratio as a safety
+  // guard for smaller large-context windows.
+  if (isStrataProvider(provider) && contextWindow >= config.strataLargeContextMinWindow) {
+    return Math.min(ratioThreshold, config.strataLargeContextThresholdTokens)
+  }
+
+  // llama.cpp deployments in the <=62K class use the requested fixed 50K
+  // boundary. For windows too small to hold 50K safely, fall back to the ratio.
+  if (isLlamaCppProvider(provider) && contextWindow <= config.llamaCppMaxWindow) {
+    if (contextWindow > config.llamaCppThresholdTokens) return config.llamaCppThresholdTokens
+    return ratioThreshold
+  }
+
+  const absoluteThreshold = contextWindow >= config.largeContextMinWindow
+    ? config.largeContextThresholdTokens
+    : config.thresholdTokens
+  return Math.min(ratioThreshold, absoluteThreshold)
+}
+
+export function rolloverMessagePending(agent, messageId) {
+  const nextTurn = Array.isArray(agent?.inbox?.nextTurn) ? agent.inbox.nextTurn : []
+  const nextStep = Array.isArray(agent?.inbox?.nextStep) ? agent.inbox.nextStep : []
+  return [...nextTurn, ...nextStep].some(message => message?.id === messageId)
+}
+
+export function armRolloverWakeWatchdog(agent, resumeMessage, onRecovery) {
+  if (!agent || typeof agent.whenIdle !== 'function') return undefined
+
+  const watchdog = (async () => {
+    await agent.whenIdle()
+
+    if (agent.status !== 'idle') return { recovered: false, reason: 'not-idle' }
+    if (!rolloverMessagePending(agent, resumeMessage.id)) {
+      return { recovered: false, reason: 'resume-consumed' }
+    }
+
+    // DeepSeek Harness has a documented driver-retirement race where a waking
+    // followup can remain parked in nextTurn while the agent has already gone
+    // idle. At that point one fresh waking input is enough to restart the
+    // driver. Do this only after proving our exact resume message is still
+    // pending; never poll and never loop.
+    agent.steer(pluginMessage([
+      '[DSH CONTEXT HANDOFF WAKE]',
+      'The rollover resume prompt is already queued for this fresh session.',
+      'Start that continuation now. Read the handoff first and continue the unfinished task.',
+      'Do not repeat completed side effects.',
+    ].join('\n')))
+
+    const result = { recovered: true, reason: 'retirement-race' }
+    if (typeof onRecovery === 'function') onRecovery(result)
+    return result
+  })()
+
+  // The watchdog is intentionally detached from the rollover call: a healthy
+  // continuation may run for minutes before becoming idle, and rollover must
+  // not block on the whole model/tool turn. The catch prevents an unhandled
+  // rejection if the owning agent is disposed while the watcher is pending.
+  watchdog.catch(() => {})
+  return watchdog
+}
+
+export function wakeRotatedSession(agent, resumeMessage, onRecovery) {
+  agent.followup(resumeMessage)
+  const watchdog = armRolloverWakeWatchdog(agent, resumeMessage, onRecovery)
+  return {
+    running: agent.status === 'running',
+    watchdog: watchdog !== undefined,
+  }
 }
 
 function isGeneratedCheckpointText(text) {
@@ -219,12 +302,21 @@ async function createRotatedSession({
     }
   }
 
-  handle.agent.followup(pluginMessage(resumeInstruction(filePath)))
-  return { targetId, presetId }
+  const wake = wakeRotatedSession(
+    handle.agent,
+    pluginMessage(resumeInstruction(filePath)),
+    () => {
+      ctx.logger.warn(
+        `dsh-context-rotation: recovered stranded rollover ${targetId} after Harness driver-retirement race`,
+      )
+    },
+  )
+
+  return { targetId, presetId, wake }
 }
 
 export function apply(ctx, rawConfig = {}) {
-  const probe = createRuntimeProbe({ version: '0.5.0' })
+  const probe = createRuntimeProbe({ version: '0.5.7' })
   const config = resolveConfig(rawConfig)
   const owned = new Map()
   const finishTracker = createFinishTracker()
@@ -236,9 +328,11 @@ export function apply(ctx, rawConfig = {}) {
   const handoffs = new Map()
 
   ctx.logger.info(
-    `dsh-context-rotation: loaded v0.5.0; `
+    `dsh-context-rotation: loaded v0.5.7; `
     + `handoffThreshold=${(config.thresholdRatio * 100).toFixed(1)}%; `
     + `thresholdTokens=${config.thresholdTokens}; `
+    + `largeContextThresholdTokens=${config.largeContextThresholdTokens}; `
+    + `largeContextMinWindow=${config.largeContextMinWindow}; `
     + `emergencyRatio=${(config.emergencyRatio * 100).toFixed(1)}%; `
     + `maxOutputContinuations=${config.maxOutputContinuations}`,
   )
@@ -253,11 +347,12 @@ export function apply(ctx, rawConfig = {}) {
     if (event.type !== 'turn/end') return
     finishTracker.clearTurn(session.id, event.data.turn)
 
-    // Keep the continuation-chain budget across an automatically continued
-    // max-token turn. Any other terminal reason ends that chain.
-    if (event.data.reason?.kind !== 'max-tokens') {
-      continuationChains.delete(session.id)
-    }
+    // Do not clear max-output continuation state here. Harness may report a
+    // terminal turn/end reason that does not preserve the assistant-stream
+    // max-tokens finish reason for an automatically queued follow-up. Clearing
+    // here can reset the chain to 1/N on every continuation and create an
+    // effectively unbounded prompt loop. The chain is cleared in
+    // agent/turn-stopping only after a later turn finishes without max-tokens.
   })
 
   ctx.on('agent/disposed', ({ agent }) => {
@@ -375,7 +470,7 @@ export function apply(ctx, rawConfig = {}) {
     const pendingTokens = estimatePendingTokens(tokenMeter, messages)
     const projectedTokens = pressure.pressureTokens + pendingTokens
     const projectedRatio = projectedTokens / pressure.contextWindow
-    const thresholdTokens = rotationThresholdTokens(config, pressure.contextWindow)
+    const thresholdTokens = rotationThresholdTokens(config, pressure.contextWindow, modelSelection?.provider)
 
     if (projectedTokens < thresholdTokens) return await next()
 

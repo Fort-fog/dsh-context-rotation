@@ -16,5 +16,5 @@ test('invalid handoff never deletes planning state and falls back to normal work
 })
 
 test('startup identifies current version', () => {
-  assert.match(index, /loaded v0\.5\.0/)
+  assert.match(index, /loaded v0\.5\.7/)
 })

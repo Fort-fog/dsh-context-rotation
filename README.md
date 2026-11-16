@@ -1,17 +1,71 @@
-# dsh-context-rotation 0.5.0
+# dsh-context-rotation 0.5.7
 
-DeepSeek Harness Desktop context protection for root sessions and local subagents.
+## Provider-specific rotation thresholds
+
+Context rotation and durable handoff for **DeepSeek Harness Desktop**, designed for long-running local LLM coding and agent sessions.
+
+Current defaults:
+
+- **Strata**: for context windows `>=100000`, rotate at **100000 tokens**, unless `thresholdRatio` reaches its limit earlier. With a `131072` window the effective boundary is `100000` (~76.3%).
+- **llama.cpp** (`llama.cpp`, `llamacpp`, `llama_cpp`): for context windows `<=62000`, rotate at **50000 tokens** when the window is large enough; smaller windows fall back to the ratio guard.
+- **Other providers**: keep the generic rule `min(contextWindow * thresholdRatio, thresholdTokens)` below the large-context class and `min(contextWindow * thresholdRatio, largeContextThresholdTokens)` in the generic large-context class.
+
+The plugin does not change provider/model/reasoning/context/max-token/sampling/Strata/API settings.
+
+### Relevant default values
+
+```yaml
+thresholdRatio: 0.80
+thresholdTokens: 52000
+largeContextThresholdTokens: 52000
+largeContextMinWindow: 100000
+strataLargeContextThresholdTokens: 100000
+strataLargeContextMinWindow: 100000
+llamaCppThresholdTokens: 50000
+llamaCppMaxWindow: 62000
+emergencyRatio: 0.95
+maxOutputContinuations: 3
+```
+
+## 0.5.7 — runtime version/probe hotfix
+
+0.5.6 correctly implemented the provider-specific thresholds above, but `index.js` still passed the literal string `0.5.5` into the runtime probe and startup log. As a result, a correctly loaded 0.5.6 installation could report `"version": "0.5.5"` in `/tmp/dsh-context-rotation-runtime.json` and log `loaded v0.5.5`.
+
+0.5.7 changes only those version-reporting strings (plus the version assertion test and this documentation). **Threshold behavior is unchanged from 0.5.6.**
+
+## 0.5.6 — provider-specific thresholds
+
+0.5.6 introduced the current provider-specific policy:
+
+- Strata large contexts: 100000-token boundary;
+- llama.cpp up to 62K: 50000-token boundary;
+- all other providers retain the generic threshold logic.
+
+The handoff, max-output continuation, retirement-race watchdog, hard handoff freeze, emergency overflow recovery, handoff format, and subagent behavior are unchanged.
+
+## 0.5.4 — previous 80% large-context policy
+
+0.5.4 used `floor(contextWindow * thresholdRatio)` directly for 100K+ windows. That policy is retained in history only; 0.5.6 supersedes it because Harness compaction can fire first on the current 131072/8128 configuration.
+
+## 0.5.3 — retirement-race rollover watchdog
+
+0.5.3 kept the 64K/128K thresholds from 0.5.2 unchanged; 0.5.4 supersedes the 80K large-context ceiling with a true 80% ratio. It fixes a DeepSeek Harness driver-retirement race that can leave a successful `followup()` parked in `nextTurn` while the fresh agent is already idle. The plugin now arms a detached watchdog with the public `agent.whenIdle()` API; after quiescence it checks the public inbox for the exact rollover resume message. Only if that same message is still pending does it issue one `agent.steer()` wake. There is no polling loop, no repeated wake prompt, and healthy rollovers receive no extra message.
+
+## 0.5.2 — adaptive 128K threshold + rollover wake guard
+
+0.5.2 keeps the 64K behavior from 0.5.1, but raises the absolute ceiling for 100K+ context windows to 80K so healthy 128K/131K Strata sessions are not rotated at only ~34–40% context usage.
+
+Fresh-session rollover still uses Harness `agent.followup()` as the primary public API. Because Harness documents `followup()` as a waking delivery, the plugin now verifies that the new agent actually enters `running`. If it remains idle, the plugin issues exactly one `agent.steer()` wake message. There is no retry loop and no repeated wake-prompt spam.
+
+## 0.5.1 — bounded max-output continuation hotfix
+
+0.5.1 fixes a continuation-chain reset that could cause repeated automatic `continue` prompts after `Output token limit reached`. The chain counter now survives `turn/end` and is cleared only after a later turn actually finishes without `max-tokens`. The default automatic continuation cap is reduced from 6 to 3.
 
 ## 0.5.0 — early absolute rotation for 128K local contexts
 
-0.5.0 keeps the proven 0.4.5 architecture and adds an absolute early-rotation ceiling.
+0.5.0 introduced an absolute rotation ceiling; 0.5.1 fixed continuation-chain accounting; 0.5.2 raised large-context rotation to 80K; 0.5.3 fixed stranded rollover wake-up; 0.5.4 tried full 80% on 100K+ contexts; 0.5.6 restores an early large-context ceiling so Harness compaction cannot win the race.
 
-The effective root/subagent rotation trigger is now the earlier of:
-
-- `contextWindow * thresholdRatio` (default 80%), or
-- `thresholdTokens` (default 52,000 tokens).
-
-That means a 128K local model rotates at about 52K instead of drifting toward 100K+, while a 65K model still rotates near the old 80% point. No model/provider/Strata settings are changed.
+For sub-100K windows the plugin uses the earlier of `contextWindow * thresholdRatio` and `thresholdTokens` (52,000 by default). For 100K+ windows it uses the earlier of the ratio and `largeContextThresholdTokens` (also 52,000 by default). No model/provider/Strata settings are changed.
 
 The handoff path also filters known autogenerated checkpoint/failed-compaction text from deterministic recovery state, so duplicated compaction summaries are less likely to be carried into the fresh session. The resume instruction explicitly requires checking the real workspace/git/runtime state before repeating builds, tests, installs, launches, writes, or commits.
 
@@ -20,20 +74,21 @@ Default patch values:
 ```yaml
 thresholdRatio: 0.80
 thresholdTokens: 52000
+largeContextThresholdTokens: 52000
+largeContextMinWindow: 100000
 emergencyRatio: 0.95
-maxOutputContinuations: 6
+maxOutputContinuations: 3
 ```
 
 All existing 0.4.5 protections remain: hard handoff freeze, emergency overflow recovery, subagent finalization, and fresh-turn max-output continuation.
 
 ---
 
-
-DeepSeek Harness Desktop context protection for root sessions and local subagents.
+The sections below document the retained behavior from the 0.4.x series that 0.5.0 builds on.
 
 ## Root sessions
 
-At projected 80% context load, normal project work stops and the old root session prepares a durable Markdown handoff. A fresh root session reads it first and continues.
+At the configured adaptive context boundary, normal project work stops and the old root session prepares a durable Markdown handoff. A fresh root session reads it first and continues.
 
 The primary gate is `agent/pre-step`.
 
